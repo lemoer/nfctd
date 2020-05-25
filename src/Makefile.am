@@ -4,4 +4,4 @@ AM_LDFLAGS = @LIBNETSNMPAGENT_LDFLAGS@
 
 bin_PROGRAMS = nfctd
 nfctd_SOURCES = nfctd-snmp.c lcfg_static.c \
-    nfctd.c
+    nfctd.c usock.c

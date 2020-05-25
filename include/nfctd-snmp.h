@@ -149,5 +149,6 @@ struct nfctTable_entry {
   struct nfctTable_entry *next;
 };
 
+extern struct nfctTable_entry *nfctTable_head;
 
 #endif                          /* NFCTD_H */

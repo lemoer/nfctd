@@ -51,6 +51,7 @@
 
 #include "nfctd-snmp.h"
 #include "lcfg_static.h"
+#include "usock.h"
 
 #define IP6_HDRLEN 40  // IPv6 header length
 #define TCP_HDRLEN 20  // TCP header length, excludes options data
@@ -64,6 +65,7 @@ struct nfctd {
 	struct nfct_handle *netlink_handle;
 	struct nfctd_group *groups;
 	ev_io nf_callback_watcher;
+	ev_io usock_watcher;
 	ev_io *iow;
 	ev_timer snmp_timer;
 	ev_check snmp_check;
@@ -700,6 +702,120 @@ void nfctd_new(const char *config_path)
 	signal(SIGSEGV, sigsegv_backtrace_cb);
 }
 
+void send_entry_attr(int client_sd, struct nfctTable_entry *entry, const char* name, const char* fmt, ... ) {
+	va_list vl;
+	va_start(vl, fmt);
+
+	char buf[1024];
+	int rem_len = 1024-2;
+
+	int len = snprintf(buf, rem_len, "group[%ld].%s = ", entry->groupId, name);
+	rem_len -= len;
+
+	int len2 = vsnprintf(buf+len, rem_len, fmt, vl);
+
+	buf[len+len2] = '\n';
+	buf[len+len2+1] = '\0';
+
+	usock_sendstr(client_sd, buf);
+
+	va_end(vl);
+}
+
+/* Accept usock requests */
+void usock_accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
+{
+	int client_sd;
+
+	if(EV_ERROR & revents)
+	{
+		perror("got invalid event");
+		return;
+	}
+
+	// Accept usock request
+	client_sd = usock_accept(watcher->fd);
+
+	if (client_sd < 0)
+	{
+		perror("accept error");
+		return;
+	}
+
+	struct nfctTable_entry *entry;
+
+	int cnt = 0;
+	for(entry = nfctTable_head; entry; entry=entry->next) {
+		cnt++;
+	}
+
+	char buf[1024];
+	int len = snprintf(buf, 1023, "groupCnt = %d\n", cnt);
+	buf[len] = '\0';
+
+	usock_sendstr(client_sd, buf);
+
+	for(entry = nfctTable_head; entry; entry=entry->next) {
+#define ENTRY_ATTR(name, fmt) send_entry_attr(client_sd, entry, #name, fmt, entry->name);
+		//send_entry_attr(client_sd, entry, "label", "\"%s\"", entry->label);
+		ENTRY_ATTR(label, "\"%s\"")
+		ENTRY_ATTR(bpfFilter, "\"%s\"")
+		ENTRY_ATTR(ipv4TcpCount, "%ld")
+		ENTRY_ATTR(ipv4TcpAssured, "%ld");
+		ENTRY_ATTR(ipv4TcpHalfAssured, "%ld");
+		ENTRY_ATTR(ipv4TcpUnreplied, "%ld");
+		ENTRY_ATTR(ipv4TcpStateSynSent, "%ld");
+		ENTRY_ATTR(ipv4TcpStateSynRecv, "%ld");
+		ENTRY_ATTR(ipv4TcpStateEstablished, "%ld");
+		ENTRY_ATTR(ipv4TcpStateFinWait, "%ld");
+		ENTRY_ATTR(ipv4TcpStateCloseWait, "%ld");
+		ENTRY_ATTR(ipv4TcpStateLastAck, "%ld");
+		ENTRY_ATTR(ipv4TcpStateTimeWait, "%ld");
+		ENTRY_ATTR(ipv4TcpStateClose, "%ld");
+		ENTRY_ATTR(ipv4TcpStateSynSentAgain, "%ld");
+		ENTRY_ATTR(ipv4UdpCount, "%ld");
+		ENTRY_ATTR(ipv4UdpAssured, "%ld");
+		ENTRY_ATTR(ipv4UdpHalfAssured, "%ld");
+		ENTRY_ATTR(ipv4UdpUnreplied, "%ld");
+		ENTRY_ATTR(ipv4IcmpCount, "%ld");
+		ENTRY_ATTR(ipv4IcmpAssured, "%ld");
+		ENTRY_ATTR(ipv4IcmpHalfAssured, "%ld");
+		ENTRY_ATTR(ipv4IcmpUnreplied, "%ld");
+		ENTRY_ATTR(ipv6TcpCount, "%ld");
+		ENTRY_ATTR(ipv6TcpAssured, "%ld");
+		ENTRY_ATTR(ipv6TcpHalfAssured, "%ld");
+		ENTRY_ATTR(ipv6TcpUnreplied, "%ld");
+		ENTRY_ATTR(ipv6TcpStateSynSent, "%ld");
+		ENTRY_ATTR(ipv6TcpStateSynRecv, "%ld");
+		ENTRY_ATTR(ipv6TcpStateEstablished, "%ld");
+		ENTRY_ATTR(ipv6TcpStateFinWait, "%ld");
+		ENTRY_ATTR(ipv6TcpStateCloseWait, "%ld");
+		ENTRY_ATTR(ipv6TcpStateLastAck, "%ld");
+		ENTRY_ATTR(ipv6TcpStateTimeWait, "%ld");
+		ENTRY_ATTR(ipv6TcpStateClose, "%ld");
+		ENTRY_ATTR(ipv6TcpStateSynSentAgain, "%ld");
+		ENTRY_ATTR(ipv6UdpCount, "%ld");
+		ENTRY_ATTR(ipv6UdpAssured, "%ld");
+		ENTRY_ATTR(ipv6UdpHalfAssured, "%ld");
+		ENTRY_ATTR(ipv6UdpUnreplied, "%ld");
+		ENTRY_ATTR(ipv6IcmpCount, "%ld");
+		ENTRY_ATTR(ipv6IcmpAssured, "%ld");
+		ENTRY_ATTR(ipv6IcmpHalfAssured, "%ld");
+		ENTRY_ATTR(ipv6IcmpUnreplied, "%ld");
+#undef ENTRY_ATTR
+	}
+
+	usock_finish(client_sd);
+}
+
+void usock_init() {
+	int usock = usock_prepare("/tmp/nfctd.sock");
+
+	// Initialize and start a watcher to accepts client requests
+	ev_io_init(&g_nfctd->usock_watcher, usock_accept_cb, usock, EV_READ);
+	ev_io_start(g_nfctd->loop, &g_nfctd->usock_watcher);
+}
+
 /**
  * Main loop
  */
@@ -713,6 +829,8 @@ int main(int argc, char *argv[])
 	}
 
 	nfctd_new(argv[1]);
+
+	usock_init();
 
 	snmp_enable_stderrlog();
 	snmp_set_do_debugging(0);
